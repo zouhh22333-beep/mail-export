@@ -6,6 +6,7 @@ No mailbox/network access. See references/archive-rules.md for the manifest.
 
 import argparse
 import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -207,7 +208,7 @@ class Store:
         self.db.execute("UPDATE artifacts SET state='saved', error=NULL WHERE account_id=? AND message_id=? AND part_id=?", key)
         self.db.commit()
 
-    def import_one(self, account, item, check=False):
+    def import_one(self, account, item, check=False, *, content=None):
         result = {"message_id": item.get("message_id"), "part_id": item.get("part_id"),
                   "original_name": item.get("original_name"), "requested_name": item.get("save_name")}
         key = None
@@ -221,7 +222,8 @@ class Store:
                 raise ArchiveError("subject must be a string")
             row = self.row(key)
             if self.valid(row):
-                self.promote(key)
+                if row["state"] == "publishing":
+                    self.promote(key)
                 result.update(state="skipped", path=str(self.root / row["relative_path"]))
                 if "save_name" in item or "directory" in item:
                     result["warning"] = "existing indexed path retained; check/import do not rename saved artifacts"
@@ -234,6 +236,10 @@ class Store:
                 # Do not echo connector errors: they can contain credentials or content.
                 raise ArchiveError("connector_error")
             source_fields = [field for field in ("source_path", "text") if field in item]
+            if content is not None:
+                if not isinstance(content, bytes):
+                    raise ArchiveError("content must be bytes")
+                source_fields.append("content")
             if len(source_fields) != 1:
                 raise ArchiveError("provide exactly one of source_path or text")
             source = None
@@ -241,7 +247,7 @@ class Store:
                 source = Path(required_string(item["source_path"], "source_path"))
                 if not source.is_absolute() or not source.is_file():
                     raise ArchiveError("source_path must be an absolute existing file")
-            elif not isinstance(item["text"], str):
+            elif content is None and not isinstance(item["text"], str):
                 raise ArchiveError("text must be a string")
             original = item.get("original_name")
             chosen = item.get("save_name")
@@ -257,7 +263,7 @@ class Store:
                 if item["kind"] == "attachment":
                     name = "附件_" + part
                 else:
-                    suffix = ".txt" if "text" in item else (".eml" if source.suffix.lower() == ".eml" else None)
+                    suffix = ".txt" if "text" in item else (".eml" if source and source.suffix.lower() == ".eml" else None)
                     if suffix is None:
                         raise ArchiveError("email source needs original_name, fallback_name or explicit save_name for its actual format")
                     subject = item.get("subject") or ""
@@ -268,15 +274,15 @@ class Store:
             try:
                 with tempfile.NamedTemporaryFile(mode="wb", prefix=".mail-export-", suffix=".tmp", dir=directory, delete=False) as output:
                     temp = Path(output.name)
-                    if source:
-                        with source.open("rb") as input_stream:
-                            for block in iter(lambda: input_stream.read(1024 * 1024), b""):
-                                output.write(block)
-                    else:
-                        output.write(item["text"].encode("utf-8"))
+                    digest, size = hashlib.sha256(), 0
+                    with source.open("rb") if source else io.BytesIO(content if content is not None else item["text"].encode("utf-8")) as input_stream:
+                        for block in iter(lambda: input_stream.read(1024 * 1024), b""):
+                            output.write(block)
+                            digest.update(block)
+                            size += len(block)
                     output.flush()
                     os.fsync(output.fileno())
-                size, checksum = digest_file(temp)
+                checksum = digest.hexdigest()
                 number = 1
                 while True:
                     final = self.destination(directory / collision_name(name, number))

@@ -2,6 +2,7 @@
 """Download real QQ mail/attachment bytes via read-only IMAP; Python 3.10+."""
 import argparse
 import base64
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from email import policy
 from email.errors import InvalidBase64PaddingDefect, InvalidBase64CharactersDefect, InvalidBase64LengthDefect
@@ -16,7 +17,7 @@ import re
 import ssl
 import string
 import sys
-import tempfile
+from time import perf_counter
 
 from archive_store import Store, ArchiveError
 
@@ -43,10 +44,13 @@ def validate(config):
     if not isinstance(config, dict):
         raise ExportError('config_must_be_object')
     allowed = {'mailbox', 'since', 'before', 'limit', 'all', 'uids', 'from', 'subject',
-               'mode', 'filename', 'include_inline', 'name_template', 'directory'}
+               'mode', 'filename', 'include_inline', 'name_template', 'directory', 'workers'}
     if set(config) - allowed:
         raise ExportError('unknown_config_fields:' + ','.join(sorted(set(config) - allowed)))
     result = dict(config)
+    if type(result.get('workers', 2)) is not int or not 1 <= result.get('workers', 2) <= 4:
+        raise ExportError('workers_must_be_integer_1_to_4')
+    result.setdefault('workers', 2)
     for key in ('mailbox', 'from', 'subject', 'filename', 'name_template'):
         if key in result and (not isinstance(result[key], str) or not result[key].strip()):
             raise ExportError(key + '_must_be_nonempty_string')
@@ -155,6 +159,16 @@ class Session:
         self.client = None
         self.validity = None
 
+    def fork(self):
+        other = Session(self.account, self.secret, self.mailbox)
+        other.validity = self.validity
+        try:
+            other.connect()
+            return other
+        except Exception:
+            other.close()
+            raise
+
     def connect(self):
         self.close()
         self.client = imaplib.IMAP4_SSL('imap.qq.com', 993, ssl_context=ssl.create_default_context(), timeout=60)
@@ -191,7 +205,7 @@ class Session:
             self.client = None
 
 
-def candidates(session, config):
+def candidates(session, config, db=None, metrics=None):
     criteria = []
     for key, word in (('since', 'SINCE'), ('before', 'BEFORE')):
         if key in config:
@@ -206,11 +220,31 @@ def candidates(session, config):
         if missing:
             raise ExportError('requested_UID_missing_or_outside_date_range:' + ','.join(sorted(missing, key=int)))
         found = config['uids']
-    result = []
-    for offset in range(0, len(found), 100):
-        batch = found[offset:offset + 100]
+    found = list(dict.fromkeys(found))
+    scope = (session.account.casefold(), session.mailbox, session.validity)
+    metadata = {}
+    if db is not None:
+        db.execute('CREATE TABLE IF NOT EXISTS imap_headers_v1 (account TEXT, mailbox TEXT, validity TEXT, uid TEXT, subject TEXT, sender TEXT, received TEXT, PRIMARY KEY(account,mailbox,validity,uid))')
+        for offset in range(0, len(found), 400):
+            batch = found[offset:offset + 400]
+            query = 'SELECT uid,subject,sender,received FROM imap_headers_v1 WHERE account=? AND mailbox=? AND validity=? AND uid IN (' + ','.join('?' for _ in batch) + ')'
+            for row in db.execute(query, (*scope, *batch)):
+                try:
+                    moment = datetime.fromisoformat(row['received'])
+                    if moment.tzinfo is None:
+                        continue
+                    metadata[row['uid']] = dict(uid=row['uid'], subject=row['subject'], sender=row['sender'], received=moment)
+                except (TypeError, ValueError):
+                    pass  # Incomplete cache records are fetched again.
+    if metrics is not None:
+        metrics['header_cache_hits'] = len(metadata)
+        metrics['headers_fetched'] = len(found) - len(metadata)
+    pending = [uid for uid in found if uid not in metadata]
+    for offset in range(0, len(pending), 100):
+        batch = pending[offset:offset + 100]
         data = session.fetch(','.join(batch), '(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (SUBJECT FROM DATE)])')
         seen = set()
+        fresh = []
         for response in data:
             if not isinstance(response, tuple) or len(response) != 2:
                 continue
@@ -223,60 +257,141 @@ def candidates(session, config):
             seen.add(uid)
             header = PARSER.parsebytes(literal([response]))
             subject, sender = str(header.get('Subject', '')), str(header.get('From', ''))
-            if config.get('subject', '').casefold() not in subject.casefold() or config.get('from', '').casefold() not in sender.casefold():
-                continue
-            result.append({'uid': uid, 'subject': subject, 'sender': parseaddr(sender)[1] or sender, 'received': received_at([response])})
+            moment = received_at([response])
+            metadata[uid] = dict(uid=uid, subject=subject, sender=sender, received=moment)
+            fresh.append((*scope, uid, subject, sender, moment.isoformat()))
         if seen != set(batch):
             raise ExportError('metadata_UID_missing_retry_selection')
+        if db is not None:
+            db.executemany('INSERT OR REPLACE INTO imap_headers_v1 VALUES (?,?,?,?,?,?,?)', fresh)
+            db.commit()
+    result = []
+    for uid in found:
+        meta = metadata[uid]
+        if config.get('subject', '').casefold() in meta['subject'].casefold() and config.get('from', '').casefold() in meta['sender'].casefold():
+            result.append(dict(meta, sender=parseaddr(meta['sender'])[1] or meta['sender']))
     result.sort(key=lambda item: (item['received'], int(item['uid'])), reverse=True)
     return len(found), len(result), result[:config['limit']] if 'limit' in config else result
 
 
+class Downloads:
+    """Small bounded batches; each client has at most one in-flight command."""
+    def __init__(self, session, workers):
+        self.sessions = [session]
+        self.workers = workers
+        self.pool = None
+        self.warning = None
+        self.expanded = False
+
+    def fetch_batch(self, messages):
+        if not messages:
+            return []
+        if len(messages) > 1 and not self.expanded:
+            self.expanded = True
+            for _ in range(1, min(self.workers, len(messages))):
+                try:
+                    self.sessions.append(self.sessions[0].fork())
+                except (ExportError, imaplib.IMAP4.error, OSError) as exc:
+                    if str(exc) == 'UIDVALIDITY_changed_restart_selection':
+                        raise
+                    self.warning = 'extra_connection_unavailable_using_fewer_workers'
+                    break
+            if len(self.sessions) > 1:
+                self.pool = ThreadPoolExecutor(max_workers=len(self.sessions))
+
+        def fetch_one(session, meta):
+            try:
+                return literal(session.fetch(meta['uid'], '(UID BODY.PEEK[])'))
+            except (ExportError, imaplib.IMAP4.error, OSError, ValueError) as exc:
+                return exc
+
+        result = []
+        for offset in range(0, len(messages), len(self.sessions)):
+            group = messages[offset:offset + len(self.sessions)]
+            if self.pool is None:
+                result.extend(fetch_one(self.sessions[0], meta) for meta in group)
+            else:
+                futures = [self.pool.submit(fetch_one, session, meta) for session, meta in zip(self.sessions, group)]
+                result.extend(future.result() for future in futures)
+        if any(isinstance(value, ExportError) and str(value) == 'UIDVALIDITY_changed_restart_selection' for value in result):
+            raise ExportError('UIDVALIDITY_changed_restart_selection')
+        return result
+
+    def close(self):
+        if self.pool is not None:
+            self.pool.shutdown(wait=True, cancel_futures=True)
+        for session in self.sessions[1:]:
+            session.close()
+
+
+def artifacts_from_raw(raw, meta, config):
+    message = PARSER.parsebytes(raw)
+    if config['mode'] in ('raw', 'both'):
+        yield 'raw', 'email', None, (meta['subject'] or '无主题') + '.eml', raw, None
+    if config['mode'] in ('attachments', 'both'):
+        for position, part in selected_attachments(message, config.get('include_inline', False)):
+            original = part.get_filename()
+            fallback = '附件_' + position
+            if config.get('filename') and not fnmatch.fnmatchcase((original or fallback).casefold(), config['filename'].casefold()):
+                continue
+            value = part.get_payload(decode=True)
+            error = None
+            if not isinstance(value, bytes) or any(isinstance(v, BAD_BASE64) for v in part.defects):
+                error = 'unsupported_or_invalid_MIME_attachment'
+            yield 'attachment:' + position, 'attachment', original, fallback, value, error
+
+
 def export(config, root, session):
+    started = perf_counter()
     store = Store(root)
+    downloads = Downloads(session, config.get('workers', 2))
+    metrics = {'body_fetches': 0, 'body_bytes': 0, 'download_seconds': 0.0, 'verify_seconds': 0.0, 'save_seconds': 0.0}
     try:
         store.db.execute('CREATE TABLE IF NOT EXISTS imap_scans (account TEXT, message TEXT, selection TEXT, parts TEXT, PRIMARY KEY(account,message,selection))')
         store.db.commit()
         account = 'qq-imap:' + session.account.casefold()
-        scanned, matched, messages = candidates(session, config)
+        tick = perf_counter()
+        scanned, matched, messages = candidates(session, config, store.db, metrics)
+        metrics['selection_seconds'] = perf_counter() - tick
         selection = json.dumps({k: config.get(k) for k in ('mode', 'filename', 'include_inline')}, sort_keys=True)
         report = {'mode': 'qq-imap', 'root': str(store.root), 'candidate_messages': scanned, 'matched_messages': matched,
                   'selected_messages': len(messages), 'messages': [], 'results': []}
         counter = 0
-        # Staging is beneath the validated archive metadata directory, no credentials.
-        with tempfile.TemporaryDirectory(prefix='imap-staging-', dir=store.root / '.mail-export') as temp:
-            stage = Path(temp)
-            for meta in messages:
+        width = config.get('workers', 2)
+        for offset in range(0, len(messages), width):
+            plans = []
+            tick = perf_counter()
+            for meta in messages[offset:offset + width]:
                 message_id = json.dumps([session.mailbox, session.validity, meta['uid']], ensure_ascii=False, separators=(',', ':'))
                 cached = store.db.execute('SELECT parts FROM imap_scans WHERE account=? AND message=? AND selection=?', (account, message_id, selection)).fetchone()
+                known = json.loads(cached['parts']) if cached else None
+                # One verification pass; no second check or saved-row UPDATE on a cache hit.
+                checked = [store.import_one(account, part, check=True) for part in known] if known is not None else None
+                ready = checked is not None and all(item['state'] == 'skipped' for item in checked)
+                plans.append((meta, message_id, checked if ready else None))
+            metrics['verify_seconds'] += perf_counter() - tick
+            pending = [meta for meta, _, checked in plans if checked is None]
+            tick = perf_counter()
+            fetched = iter(downloads.fetch_batch(pending))
+            metrics['download_seconds'] += perf_counter() - tick
+            metrics['body_fetches'] += len(pending)
+            tick = perf_counter()
+            for meta, message_id, checked in plans:
                 results = []
                 try:
-                    known = json.loads(cached['parts']) if cached else None
-                    if known is not None and all(store.valid(store.row((account, message_id, part['part_id']))) for part in known):
-                        results = [store.import_one(account, part, check=True) for part in known]
-                        counter += len(known)
+                    if checked is not None:
+                        results = checked
+                        counter += len(checked)
                         if config.get('name_template') or 'directory' in config:
                             for item in results:
                                 item['warning'] = 'existing indexed path retained; rename is a separate operation'
                     else:
-                        raw = literal(session.fetch(meta['uid'], '(UID BODY.PEEK[])'))
-                        message = PARSER.parsebytes(raw)
-                        artifacts = []
-                        if config['mode'] in ('raw', 'both'):
-                            artifacts.append(('raw', 'email', None, (meta['subject'] or '无主题') + '.eml', raw, None))
-                        if config['mode'] in ('attachments', 'both'):
-                            for position, part in selected_attachments(message, config.get('include_inline', False)):
-                                original = part.get_filename()
-                                fallback = '附件_' + position
-                                if config.get('filename') and not fnmatch.fnmatchcase((original or fallback).casefold(), config['filename'].casefold()):
-                                    continue
-                                value = part.get_payload(decode=True)
-                                error = None
-                                if not isinstance(value, bytes) or any(isinstance(v, BAD_BASE64) for v in part.defects):
-                                    error = 'unsupported_or_invalid_MIME_attachment'
-                                artifacts.append(('attachment:' + position, 'attachment', original, fallback, value, error))
+                        raw = next(fetched)
+                        if isinstance(raw, Exception):
+                            raise raw
+                        metrics['body_bytes'] += len(raw)
                         known = []
-                        for part_id, kind, original, fallback, value, error in artifacts:
+                        for part_id, kind, original, fallback, value, error in artifacts_from_raw(raw, meta, config):
                             counter += 1
                             item = {'message_id': message_id, 'subject': meta['subject'], 'part_id': part_id, 'kind': kind,
                                     'original_name': original, 'fallback_name': fallback}
@@ -289,11 +404,7 @@ def export(config, root, session):
                             known.append(dict(item))
                             if error:
                                 item['error'] = error
-                            else:
-                                path = stage / str(counter)
-                                path.write_bytes(value)
-                                item['source_path'] = str(path)
-                            outcome = store.import_one(account, item)
+                            outcome = store.import_one(account, item, content=value if not error else None)
                             if error:
                                 outcome['error'] = error
                             results.append(outcome)
@@ -307,10 +418,17 @@ def export(config, root, session):
                 report['results'].extend(results)
                 failed = sum(item['state'] == 'failed' for item in results)
                 report['messages'].append({'uid': meta['uid'], 'files': len(results), 'state': 'failed' if failed else ('no_selected_files' if not results else 'complete')})
+            metrics['save_seconds'] += perf_counter() - tick
         report['counts'] = {state: sum(item['state'] == state for item in report['results']) for state in ('saved', 'skipped', 'failed')}
         report['complete'] = not report['counts']['failed']
+        metrics['workers_used'] = len(downloads.sessions)
+        metrics['total_seconds'] = perf_counter() - started
+        report['performance'] = {key: round(value, 4) if isinstance(value, float) else value for key, value in metrics.items()}
+        if downloads.warning:
+            report['warnings'] = [downloads.warning]
         return report
     finally:
+        downloads.close()
         store.close()
 
 
@@ -333,8 +451,12 @@ def main():
             raise ExportError('root_must_be_absolute')
         account, secret = credentials()
         session = Session(account, secret, config['mailbox'])
+        started = perf_counter()
         session.connect()
+        connected = perf_counter()
         report = export(config, args.root, session)
+        report['performance']['connect_seconds'] = round(connected - started, 4)
+        report['performance']['total_seconds'] = round(perf_counter() - started, 4)
         print(json.dumps(report, ensure_ascii=False))
         return 0 if report['complete'] else 1
     except (ExportError, ArchiveError, OSError, ValueError, imaplib.IMAP4.error) as exc:
