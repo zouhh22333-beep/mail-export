@@ -25,8 +25,6 @@ class WorkflowTests(unittest.TestCase):
 
     def test_group_companions_and_rerun(self):
         snapshot, decisions = self.prepare()
-        # A positive resume anchors its companions; no redundant classification.
-        decisions['items'].pop(1)
         first = r.finish(snapshot, decisions)
         self.assertEqual(first['counts'], dict(saved=2, skipped=0, failed=0))
         paths = [Path(row['path']) for row in first['results']]
@@ -34,6 +32,48 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual([p.name for p in paths], ['2026-10-29.pdf', '2026-10-29 (2).pdf'])
         self.assertEqual(r.finish(snapshot, decisions)['counts']['skipped'], 2)
         self.assertEqual(len(self.session.bodies), 2)
+
+    def test_mixed_root_and_named_folder_default_layout(self):
+        self.job['folder_template'] = '{date}'
+        snapshot, decisions = self.prepare()
+        # First email: resume + companion; second: only one resume is kept.
+        # Remove the second fixture attachment to represent a single-resume email.
+        removed = snapshot['candidates'].pop()
+        decisions['items'] = [d for d in decisions['items'] if d['id'] != removed['id']]
+        decisions['items'][-1]['label'] = 'resume'
+        decisions['snapshot_id'] = r.fingerprint(snapshot)
+        result = r.finish(snapshot, decisions)
+        paths = [Path(v['path']) for v in result['results']]
+        self.assertEqual(paths[0].parent, self.base / 'final' / '2026-10-29')
+        self.assertEqual(paths[1].parent, paths[0].parent)
+        self.assertEqual(paths[2], self.base / 'final' / '2026-10-28.pdf')
+        self.assertEqual(r.finish(snapshot, decisions)['counts']['skipped'], 3)
+
+    def test_multiple_resumes_without_companion_stay_in_root(self):
+        snapshot, decisions = self.prepare()
+        for d in decisions['items']:
+            d['label'] = 'resume'
+        result = r.finish(snapshot, decisions)
+        self.assertTrue(all(Path(v['path']).parent == self.base / 'final' for v in result['results']))
+
+    def test_same_date_folders_are_separate_and_stable(self):
+        self.job['folder_template'] = '统一目录'
+        snapshot, decisions = self.prepare()
+        decisions['items'][2]['label'] = 'resume'
+        result = r.finish(snapshot, decisions)
+        parents = [Path(v['path']).parent.name for v in result['results']]
+        self.assertEqual(parents, ['统一目录', '统一目录', '统一目录 (2)', '统一目录 (2)'])
+        self.assertEqual(r.finish(snapshot, decisions)['counts']['skipped'], 4)
+
+    def test_unknown_companion_in_auto_requires_classification(self):
+        snapshot, decisions = self.prepare()
+        decisions['items'][1]['label'] = 'unknown'
+        self.assertFalse(r.finish(snapshot, decisions)['complete'])
+
+    def test_folder_template_validation(self):
+        for template in ('', '{subject.__class__}', '{date:bad}'):
+            with self.assertRaises(r.ArchiveError):
+                r.validate_job(dict(self.job, folder_template=template))
 
     def test_resume_only_flat_original_name(self):
         self.job.update(layout='flat', include_companions=False)
@@ -82,3 +122,4 @@ class WorkflowTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+

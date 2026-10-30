@@ -7,11 +7,12 @@ import json
 import os
 from pathlib import Path
 import sys
+import string
 import tempfile
 from time import perf_counter
 
 import qq_imap_export as imap
-from archive_store import Store, ArchiveError, digest_file, safe_name
+from archive_store import Store, ArchiveError, digest_file, safe_name, collision_name
 
 
 def encoded(value):
@@ -23,7 +24,7 @@ def fingerprint(value):
 
 
 def validate_job(job):
-    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions'}:
+    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions', 'folder_template'}:
         raise ArchiveError('invalid_job_fields')
     if not isinstance(job.get('root'), str) or not Path(job['root']).is_absolute():
         raise ArchiveError('root_must_be_absolute')
@@ -31,10 +32,20 @@ def validate_job(job):
     result['query'] = imap.validate(job.get('query'))
     if result['query']['mode'] != 'attachments':
         raise ArchiveError('resume_workflow_requires_attachment_mode')
-    result.setdefault('layout', 'message')
-    result.setdefault('include_companions', False)
-    if result['layout'] not in ('message', 'flat') or type(result['include_companions']) is not bool:
+    result.setdefault('layout', 'auto')
+    result.setdefault('include_companions', True)
+    if result['layout'] not in ('auto', 'message', 'flat') or type(result['include_companions']) is not bool:
         raise ArchiveError('invalid_layout_or_include_companions')
+    if 'folder_template' in result:
+        template = result['folder_template']
+        try:
+            if not isinstance(template, str) or not template.strip():
+                raise ValueError()
+            for _, field, spec, conversion in string.Formatter().parse(template):
+                if field is not None and (field not in {'date', 'subject', 'sender', 'uid', 'index'} or spec or conversion):
+                    raise ValueError()
+        except ValueError:
+            raise ArchiveError('invalid_folder_template') from None
     if result['include_companions'] and 'filename' in result['query']:
         raise ArchiveError('companion_export_requires_unfiltered_attachment_inventory')
     return result
@@ -98,6 +109,35 @@ def prepare(job, work, session):
                 download_counts=download['counts'], download_failures=[r for r in download['results'] if r['state'] == 'failed'])
 
 
+def group_directory(store, account, row, prefix, template, index):
+    store.db.execute('CREATE TABLE IF NOT EXISTS resume_groups (account TEXT, message TEXT, directory TEXT UNIQUE, PRIMARY KEY(account,message))')
+    saved = store.db.execute('SELECT directory FROM resume_groups WHERE account=? AND message=?', (account, row['message_id'])).fetchone()
+    if saved:
+        path = store.destination(store.root / saved['directory'])
+        path.mkdir(parents=True, exist_ok=True)
+        return list(path.relative_to(store.root).parts)
+    name = safe_name(template.format(date=row['date'], subject=row['subject'] or '无主题',
+                                    sender=row['sender'], uid=row['uid'], index=index))
+    parent = store.destination(store.root.joinpath(*(safe_name(p) for p in prefix)))
+    parent.mkdir(parents=True, exist_ok=True)
+    allocated = {r[0].casefold() for r in store.db.execute('SELECT directory FROM resume_groups')}
+    number = 1
+    while True:
+        path = store.destination(parent / collision_name(name, number))
+        relative = path.relative_to(store.root)
+        occupied = {p.name.casefold() for p in parent.iterdir()}
+        if str(relative).casefold() not in allocated and path.name.casefold() not in occupied:
+            try:
+                path.mkdir()
+                break
+            except FileExistsError:
+                pass
+        number += 1
+    store.db.execute('INSERT INTO resume_groups VALUES (?,?,?)', (account, row['message_id'], str(relative)))
+    store.db.commit()
+    return list(relative.parts)
+
+
 def finish(snapshot, decisions):
     started = perf_counter()
     job = validate_job(snapshot['job'])
@@ -120,7 +160,7 @@ def finish(snapshot, decisions):
         labels[key] = decision['label']
     positive = {row['message_id'] for key, row in by_id.items() if labels.get(key) == 'resume'}
     unresolved = [key for key in by_id if labels.get(key, 'unknown') == 'unknown' and
-                  not (job['include_companions'] and by_id[key]['message_id'] in positive)]
+                  not (job['layout'] != 'auto' and job['include_companions'] and by_id[key]['message_id'] in positive)]
     if unresolved:
         return dict(complete=False, phase='awaiting_classification', unresolved=unresolved)
     # Verify all classified bytes, including exclusions, before publishing any file.
@@ -129,6 +169,8 @@ def finish(snapshot, decisions):
             raise ArchiveError('candidate_changed_reprepare_and_reclassify')
     selected = [row for row in snapshot['candidates'] if labels.get(row['id']) == 'resume' or
                 (job['include_companions'] and row['message_id'] in positive)]
+    with_companions = {row['message_id'] for row in selected if labels.get(row['id']) != 'resume'}
+    message_order = {mid: i for i, mid in enumerate(dict.fromkeys(row['message_id'] for row in selected), 1)}
     results = []
     store = Store(job['root'])
     try:
@@ -138,10 +180,9 @@ def finish(snapshot, decisions):
             fallback = '附件_' + row['part_id'].split(':', 1)[-1]
             item['fallback_name'] = fallback
             directory = list(job['query'].get('directory', []))
-            if job['layout'] == 'message':
-                # Stable group per message; all its selected files share the exact directory.
-                group = fingerprint([snapshot['account'], row['message_id']])
-                directory.append(safe_name((row['subject'] or '无主题')[:40]) + '_' + group)
+            if job['layout'] == 'message' or (job['layout'] == 'auto' and row['message_id'] in with_companions):
+                directory = group_directory(store, snapshot['account'], row, directory,
+                    job.get('folder_template', '{subject}'), message_order[row['message_id']])
             item['directory'] = directory
             if 'name_template' in job['query']:
                 filename = row['original_name'] or fallback
@@ -198,3 +239,4 @@ if __name__ == '__main__':
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     raise SystemExit(main())
+
