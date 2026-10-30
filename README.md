@@ -29,6 +29,16 @@ Domi 的 `mailbox_read_attachment` 只能提取附件文字。`scripts/qq_imap_e
 
 离线模拟每条网络命令 80ms、10 封邮件/30 个文件：旧版首次 1.5782s、新版 1.1357s；重复运行 0.2922s → 0.1389s。导出的文件名、附件哈希相同，EML 均与源字节一致。这是机制验证，不代表 QQ 或 Domi 的真实速度承诺。
 
+## 执行流程优化
+
+普通导出直接配置最终目录和名称，一次运行完成，省去下载后临时编写平铺改名脚本。整月查询支持 month=YYYY-MM，自动使用次月1日作为不含的终点。
+
+新增 [简历批量流程](references/resume-workflow.md)：prepare 批量下载候选 → Domi 实际阅读并填写分类清单 → finish 一次归档。支持只要简历，或简历连同同封邮件其他附件放在同一个文件夹；同封邮件已确认有简历时，随附材料不再逐一分类。未确认的候选会返回待处理，不能冒充完整识别。
+
+新流程的最终路径和去重索引同时生成；分类清单绑定候选内容哈希。旧流程自行移动文件后失效的索引不会自动修复。本次没有操作用户既有归档。
+
+此版本已做离线一致性测试，尚未在 Domi 实测整体耗时；此前模拟下载耗时不能作为新识别流程的速度保证。
+
 ## 使用
 
 下载仓库中的 [mail-export.zip](mail-export.zip)，解压后得到 `mail-export/` skill 目录。将该目录按宿主 agent 支持的方式添加为 skill；具体导入入口以宿主产品为准。
@@ -49,11 +59,11 @@ Domi 的 `mailbox_read_attachment` 只能提取附件文字。`scripts/qq_imap_e
 - [scripts/archive_store.py](scripts/archive_store.py)：本地文件保存、索引、校验、去重及续跑。
 - [scripts/qq_imap_export.py](scripts/qq_imap_export.py)：QQ 邮箱只读 IMAP、完整 EML 获取与真实 MIME 附件下载。
 - [references/qq-imap.md](references/qq-imap.md)：本地凭据配置、下载任务、命名模板、能力边界。
-- [mail-export.zip](mail-export.zip)：包含六个 skill 文件的分发包。
+- [mail-export.zip](mail-export.zip)：包含八个 skill 文件的分发包。
 
 ## 验证与限制
 
-已完成本地命名、字节保存、重名保护、去重、续跑、部分失败及打包后命令行流程验证。归档模块 16 项、QQ IMAP 模块 10 项、性能与一致性回归 9 项，共 35 项离线测试通过。覆盖并发结果一致、缓存补取、邮件删除、UIDVALIDITY、连接回退、文件损坏恢复、路径穿越及符号链接保护。
+已完成本地命名、字节保存、重名保护、去重、续跑、部分失败及打包后命令行流程验证。归档模块 16 项、QQ IMAP 模块 10 项、性能与一致性回归 9 项，另新增简历归档流程 7 项，共 42 项离线测试通过。覆盖并发结果一致、缓存补取、邮件删除、UIDVALIDITY、连接回退、文件损坏恢复、路径穿越及符号链接保护。
 
 仓库测试命令：`python -B -m unittest discover -s tests -v`。测试使用合成邮件，不读取邮箱或凭据。测试文件不装入 skill ZIP。
 
@@ -64,3 +74,4 @@ Domi 的 `mailbox_read_attachment` 只能提取附件文字。`scripts/qq_imap_e
 仅提供文字摘要的连接器仍不能下载原始附件，QQ 路径通过直接 IMAP 补齐；超大附件的外部网盘链接、无法解码的嵌套邮件附件不在当前支持范围。远端运行目录也不等于用户电脑上的本地目录。
 
 命名、接口及恢复流程的完整说明见 skill 内的文档。
+

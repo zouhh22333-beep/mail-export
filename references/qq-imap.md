@@ -46,6 +46,7 @@ python "<skill目录>/scripts/qq_imap_export.py" --config "<任务JSON绝对路�
 
 | 字段 | 含义 |
 | --- | --- |
+| `month` | YYYY-MM，自动转换当月1日至次月1日，不能与 since/before 同时使用 |
 | `mailbox` | 默认 `INBOX`；支持 IMAP 修改版 UTF-7 编码的中文文件夹名称 |
 | `since` / `before` | YYYY-MM-DD，按 IMAP 服务器 INTERNALDATE 日期，起点包含、终点不包含；不是邮件头发送日期 |
 | `limit` | 正整数，按 INTERNALDATE 与 UID 倒序选择最新 N 封 |
@@ -85,3 +86,4 @@ JSON 的 `performance` 包含 `connect_seconds`（CLI 登录）、`selection_sec
 输出只包含本地结果、文件身份、文件名及统计，不包含授权码或完整正文。`counts` 是文件数，`messages` 是邮件结果；`no_selected_files` 表示该邮件无目标附件，不等于附件保存成功。退出码 0 表示本次选择处理完成（仍需核对是否有匹配内容），1 表示部分失败，2 表示配置、认证、协议或全局错误。遇到错误先读取 JSON，不重复声称“连接器可以下载”。
 
 QQ 邮箱服务器及授权码说明参考 [腾讯云邮件集成文档](https://main.qcloudimg.com/raw/document/product/pdf/1270_46586_cn.pdf)；协议与 MIME 行为参考 Python 官方 [imaplib](https://docs.python.org/3/library/imaplib.html) 和 [email.message](https://docs.python.org/3/library/email.message.html)。
+

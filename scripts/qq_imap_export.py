@@ -44,10 +44,20 @@ def validate(config):
     if not isinstance(config, dict):
         raise ExportError('config_must_be_object')
     allowed = {'mailbox', 'since', 'before', 'limit', 'all', 'uids', 'from', 'subject',
-               'mode', 'filename', 'include_inline', 'name_template', 'directory', 'workers'}
+               'mode', 'filename', 'include_inline', 'name_template', 'directory', 'workers', 'month'}
     if set(config) - allowed:
         raise ExportError('unknown_config_fields:' + ','.join(sorted(set(config) - allowed)))
     result = dict(config)
+    if 'month' in result:
+        month = result.pop('month')
+        if not isinstance(month, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}', month) or 'since' in result or 'before' in result:
+            raise ExportError('month_requires_YYYY_MM_without_since_or_before')
+        try:
+            first = date.fromisoformat(month + '-01')
+            following = date(first.year + (first.month == 12), first.month % 12 + 1, 1)
+        except ValueError:
+            raise ExportError('invalid_month') from None
+        result.update(since=first.isoformat(), before=following.isoformat())
     if type(result.get('workers', 2)) is not int or not 1 <= result.get('workers', 2) <= 4:
         raise ExportError('workers_must_be_integer_1_to_4')
     result.setdefault('workers', 2)
@@ -472,3 +482,4 @@ if __name__ == '__main__':
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     raise SystemExit(main())
+
