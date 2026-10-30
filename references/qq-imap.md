@@ -88,3 +88,4 @@ JSON 的 `performance` 包含 `connect_seconds`（CLI 登录）、`selection_sec
 QQ 邮箱服务器及授权码说明参考 [腾讯云邮件集成文档](https://main.qcloudimg.com/raw/document/product/pdf/1270_46586_cn.pdf)；协议与 MIME 行为参考 Python 官方 [imaplib](https://docs.python.org/3/library/imaplib.html) 和 [email.message](https://docs.python.org/3/library/email.message.html)。
 
 
+

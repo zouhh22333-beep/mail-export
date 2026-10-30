@@ -66,6 +66,41 @@ def write_json(path, value):
             temp.unlink(missing_ok=True)
 
 
+def inventory(snapshot):
+    """One short reference per distinct content; full identity stays on disk."""
+    groups = {}
+    for row in snapshot['candidates']:
+        if row['sha256'] not in groups:
+            groups[row['sha256']] = dict(id=str(len(groups) + 1), source_path=row['source_path'], names=[], occurrences=0)
+        group = groups[row['sha256']]
+        name = row['original_name'] or row['part_id']
+        if name not in group['names']:
+            group['names'].append(name)
+        group['occurrences'] += 1
+    return list(groups.values())
+
+
+def expand_decisions(snapshot, decisions):
+    # Accept the previous manifest for resumability; new callers only return short IDs.
+    if 'items' in decisions:
+        return decisions['items']
+    if set(decisions) - {'snapshot_id', 'resume_ids', 'other_ids'}:
+        raise ArchiveError('unknown_classification_fields')
+    by_sha = dict(zip(dict.fromkeys(r['sha256'] for r in snapshot['candidates']), inventory(snapshot)))
+    allowed = {g['id'] for g in by_sha.values()}
+    labels = {}
+    for field, label in (('resume_ids', 'resume'), ('other_ids', 'other')):
+        values = decisions.get(field, [])
+        if not isinstance(values, list):
+            raise ArchiveError('classification_ids_must_be_lists')
+        for value in values:
+            if not isinstance(value, str) or value not in allowed or value in labels:
+                raise ArchiveError('unknown_or_duplicate_classification_id')
+            labels[value] = label
+    return [dict(id=r['id'], sha256=r['sha256'], label=labels.get(by_sha[r['sha256']]['id'], 'unknown'),
+                 reason='batch_content_classification') for r in snapshot['candidates']]
+
+
 def prepare(job, work, session):
     job = validate_job(job)
     query = dict(job['query'], mode='both')
@@ -104,7 +139,7 @@ def prepare(job, work, session):
     snapshot_id = fingerprint(snapshot)
     write_json(run / 'snapshot.json', snapshot)
     return dict(complete=False, phase='awaiting_classification', snapshot=str(run / 'snapshot.json'),
-                snapshot_id=snapshot_id, candidates=rows, context_eml=context,
+                snapshot_id=snapshot_id, candidates=inventory(snapshot),
                 download_complete=download['complete'], performance=download['performance'],
                 download_counts=download['counts'], download_failures=[r for r in download['results'] if r['state'] == 'failed'])
 
@@ -147,7 +182,7 @@ def finish(snapshot, decisions):
         raise ArchiveError('classification_snapshot_mismatch')
     by_id = {row['id']: row for row in snapshot['candidates']}
     labels = {}
-    for decision in decisions.get('items', []):
+    for decision in expand_decisions(snapshot, decisions):
         key = decision.get('id')
         if key not in by_id or key in labels:
             raise ArchiveError('unknown_or_duplicate_classification_id')
@@ -239,4 +274,5 @@ if __name__ == '__main__':
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     raise SystemExit(main())
+
 

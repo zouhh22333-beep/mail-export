@@ -119,7 +119,36 @@ class WorkflowTests(unittest.TestCase):
             with self.assertRaises(q.ExportError):
                 q.validate({'month': value})
 
+    def test_compact_inventory_deduplicates_content(self):
+        snapshot, _ = self.prepare()
+        groups = r.inventory(snapshot)
+        self.assertEqual(len(groups), 2)
+        self.assertEqual([g['occurrences'] for g in groups], [2, 2])
+        self.assertEqual([g['id'] for g in groups], ['1', '2'])
+
+    def test_compact_decisions_apply_to_all_occurrences(self):
+        snapshot, _ = self.prepare()
+        compact = dict(snapshot_id=r.fingerprint(snapshot), resume_ids=['1'], other_ids=['2'])
+        result = r.finish(snapshot, compact)
+        self.assertEqual(result['resume_files'], 2)
+        self.assertEqual(result['companion_files'], 2)
+        self.assertEqual(result['counts']['saved'], 4)
+        self.assertEqual(r.finish(snapshot, compact)['counts']['skipped'], 4)
+
+    def test_compact_missing_classification_stays_pending(self):
+        snapshot, _ = self.prepare()
+        result = r.finish(snapshot, dict(snapshot_id=r.fingerprint(snapshot), resume_ids=['1']))
+        self.assertFalse(result['complete'])
+        self.assertFalse((self.base/'final').exists())
+
+    def test_compact_invalid_or_duplicate_ids_rejected(self):
+        snapshot, _ = self.prepare()
+        for ids in (['99'], ['1','1'], [1]):
+            with self.assertRaises(r.ArchiveError):
+                r.finish(snapshot, dict(snapshot_id=r.fingerprint(snapshot), resume_ids=ids))
+
 
 if __name__ == '__main__':
     unittest.main()
+
 
