@@ -1,11 +1,13 @@
 ---
 name: mail-export
-description: 按条件批量保存邮件、简历及原始附件到本地。QQ 邮箱使用只读 IMAP，支持命名、同信材料归组、去重和续跑。
+description: 按条件批量保存 QQ、网易及可配置 IMAP 邮箱的邮件、简历和原始附件到本地，支持命名、同信材料归组、去重和续跑。
 ---
 
 # 批量邮件与简历导出
 
-QQ 邮箱优先运行自带 Python 3.10+ 脚本。Domi 的文字提取接口不能下载附件；网页登录状态与 IMAP 无关。凭据由脚本从 QQ_EMAIL_ACCOUNT、QQ_EMAIL_AUTH_CODE 读取，不向用户索取聊天中的授权码。配置及下载参数见 [QQ IMAP](references/qq-imap.md)，仅首次配置或参数不明确时读取。
+QQ、网易（163/126/yeah.net）使用同一个 Python 3.10+ IMAP 下载引擎。任务 query.provider 选 qq 或 netease，省略时兼容旧版 QQ。企业邮箱用 custom，仅支持管理员确认的 IMAP over TLS 与账号/授权码登录；OAuth/Exchange API 尚未接入。首次配置或参数不明确时读取 [IMAP 配置](references/imap.md)。
+
+QQ 凭据环境变量为 QQ_EMAIL_ACCOUNT / QQ_EMAIL_AUTH_CODE，网易为 NETEASE_EMAIL_ACCOUNT / NETEASE_EMAIL_AUTH_CODE。脚本从 Domi 实际运行环境读取，不向用户索取聊天中的授权码，不尝试解密连接器凭据。文字提取接口不能下载原始附件；连接器与网页登录状态不能替代脚本凭据。
 
 从用户要求确定范围、保存内容、最终路径和命名，一次构建任务。已知参数不查源码，已知文件夹不重复 LIST；凭据由脚本检查，不单独预检查。不重复用连接器扫描相同邮件。只在真正缺少关键条件或脚本报错时追查。
 
@@ -23,12 +25,13 @@ QQ 邮箱优先运行自带 Python 3.10+ 脚本。Domi 的文字提取接口不�
 
 ## 普通邮件或附件导出
 
-一次写配置、一次运行 scripts/qq_imap_export.py。明确平铺设 directory=[]，命名模板只在用户要求时填写。原始邮件保存真实 EML，只有正文时不能冒充 EML。
+一次写配置、一次运行 scripts/imap_export.py，provider 放在配置顶层；简历任务放在 query 内。旧 scripts/qq_imap_export.py 命令继续兼容。明确平铺设 directory=[]，命名模板只在用户要求时填写。原始邮件保存真实 EML，只有正文时不能冒充 EML。
 
 ## 范围与完成
 
 整月用 month=YYYY-MM，自动得到当月1日至次月1日。当前日期语义是服务器 INTERNALDATE；用户指定发送日期、其他时区时需据实际能力处理，不能混用。最新 N 封按真实时间排序后截取，不以默认第一页或 UID 近似代替。不要私自减少范围、格式或数量提速。
 
-最终路径从一开始就确定。成功后直接依据脚本结果简短汇报，不再写 flatten 脚本或重复列目录。失败和 existing indexed path retained 警告要说明，改名/移动旧文件必须同步索引。下载重试不覆盖用户文件。具体清单及索引接口见 [归档约定](references/archive-rules.md)。其他邮箱才按需读取 [连接器映射](references/connector-tools.md)。
+最终路径从一开始就确定。成功后直接依据脚本结果简短汇报，不再写 flatten 脚本或重复列目录。失败和 existing indexed path retained 警告要说明，改名/移动旧文件必须同步索引。下载重试不覆盖用户文件。具体清单及索引接口见 [归档约定](references/archive-rules.md)。用户指定连接器或 IMAP 不适用时按需读取 [连接器映射](references/connector-tools.md)，确认可下载真实字节再选通道，不双重扫描。
 
 汇报匹配/选中邮件数、新保存/跳过/失败文件数、实际目标路径和未完成项；不要把文件数当作邮件数。记录宿主工具调用起止时间和脚本 performance；没有端到端实测就不宣称整体提速。
+

@@ -2,6 +2,8 @@
 
 宿主负责内容识别，程序负责真实字节、命名、目录和索引。不要重新实现下载、整理和校验脚本。
 
+QQ、网易及自定义 IMAP 共用以下流程；query.provider 分别选 qq、netease、custom（省略兼容 QQ）。网易示例设 `"query":{"provider":"netease","mailbox":"INBOX","month":"2026-08"}`。企业配置及凭据变量见 [IMAP 配置](imap.md)。发件箱名称以实际 LIST 为准，不能把 QQ 的 Sent Messages 硬套到网易。
+
 创建 UTF-8 任务 JSON（日期、路径和命名按用户要求）：
 
 ```json
@@ -43,3 +45,4 @@ python "<skill>/scripts/resume_export.py" finish --snapshot "<prepare返回路�
 程序同时写最终路径和索引；重名追加序号，不覆盖原文件。同一清单重跑跳过完整文件。成功后根据返回结果直接汇报，不再读目录、查源码或另写平铺脚本。失败或 existing indexed path retained 才诊断；已有文件新命名需要单独同步重排，不能谎称已更新。
 
 候选和清单是私人数据，不放仓库。保留缓存用于续跑。模型服务超时后，已有 snapshot 和决策可直接 finish，无需重新联网或重读文件。默认不自动修复旧版已移位的索引。
+

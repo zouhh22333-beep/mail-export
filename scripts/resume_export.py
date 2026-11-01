@@ -11,7 +11,7 @@ import string
 import tempfile
 from time import perf_counter
 
-import qq_imap_export as imap
+import imap_export as imap
 from archive_store import Store, ArchiveError, digest_file, safe_name, collision_name
 
 
@@ -110,20 +110,20 @@ def prepare(job, work, session):
     work = Path(work)
     if not work.is_absolute():
         raise ArchiveError('work_must_be_absolute')
-    run = work / fingerprint({'job': job, 'account': session.account.casefold()})
+    run = work / fingerprint({'job': job, 'account': imap.metadata_key(session)})
     stage = run / 'candidates'
     download = imap.export(query, str(stage), session)
     rows, context = [], {}
     store = Store(str(stage))
     try:
-        account = 'qq-imap:' + session.account.casefold()
+        account = imap.account_key(session)
         for result in download['results']:
             if result['state'] not in ('saved', 'skipped'):
                 continue
             row = store.row((account, result['message_id'], result['part_id']))
             mailbox, validity, uid = json.loads(row['message_id'])
             meta = store.db.execute('SELECT subject,sender,received FROM imap_headers_v1 WHERE account=? AND mailbox=? AND validity=? AND uid=?',
-                                    (session.account.casefold(), mailbox, validity, uid)).fetchone()
+                                    (imap.metadata_key(session), mailbox, validity, uid)).fetchone()
             path = str(store.destination(store.root / row['relative_path']))
             if row['kind'] == 'email':
                 context[row['message_id']] = path
@@ -252,10 +252,14 @@ def main():
             if not args.job or not args.work:
                 raise ArchiveError('job_and_work_required')
             job = validate_job(read(args.job))
-            account, secret = imap.credentials()
-            session = imap.Session(account, secret, job['query']['mailbox'])
+            account, secret = imap.credentials(job['query'])
+            session = imap.Session(account, secret, job['query']['mailbox'], job['query'])
+            connected_at = perf_counter()
             session.connect()
+            connect_seconds = perf_counter() - connected_at
             result = prepare(job, args.work, session)
+            result['performance']['connect_seconds'] = round(connect_seconds, 4)
+            result['performance']['total_seconds'] = round(perf_counter() - connected_at, 4)
         else:
             if not args.snapshot or not args.decisions:
                 raise ArchiveError('snapshot_and_decisions_required')
@@ -274,5 +278,6 @@ if __name__ == '__main__':
     if hasattr(sys.stdout, 'reconfigure'):
         sys.stdout.reconfigure(encoding='utf-8')
     raise SystemExit(main())
+
 
 
