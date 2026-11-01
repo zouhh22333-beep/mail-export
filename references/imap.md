@@ -16,6 +16,8 @@ provider 由用户要求确定，不能因网易凭据缺失就改拉 QQ。普�
 
 不要求用户把授权码发到聊天，不写任务文件、日志或仓库，不读取 Domi 内部凭据库。已连接 Domi 邮箱不代表 Python 进程能取得其授权码。
 
+QQ 与网易日常导出均不依赖内置浏览器登录。缺少环境变量时 CLI 返回 action_required（type=configure_local_credentials、missing_env、browser_login_required=false）；只提示这些缺失项，不把“没有脚本凭据”解释成“请登录内置浏览器”。用户完成一次性配置后重启/刷新实际执行环境，再续跑原任务。网页登录只可能用于用户首次开启 IMAP、生成授权码或处理服务商安全验证；不自动作为附件下载通道。
+
 只在首次配置或诊断时创建连接配置，例如：
 
 ```json

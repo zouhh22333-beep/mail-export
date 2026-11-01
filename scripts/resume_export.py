@@ -267,7 +267,10 @@ def main():
         print(json.dumps(result, ensure_ascii=False))
         return 0 if result.get('complete') or (args.phase == 'prepare' and result.get('download_complete')) else 1
     except (ArchiveError, imap.ExportError, OSError, ValueError, KeyError, TypeError, imap.imaplib.IMAP4.error) as exc:
-        print(json.dumps(dict(complete=False, error=str(exc) if isinstance(exc, (ArchiveError, imap.ExportError)) else type(exc).__name__)))
+        report = dict(complete=False, error=str(exc) if isinstance(exc, (ArchiveError, imap.ExportError)) else type(exc).__name__)
+        if isinstance(exc, imap.ExportError) and exc.action_required:
+            report['action_required'] = exc.action_required
+        print(json.dumps(report))
         return 2
     finally:
         if session is not None:

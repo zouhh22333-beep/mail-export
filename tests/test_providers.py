@@ -233,6 +233,41 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(q.ExportError):
             profile_for('unit@163.com.attacker.test', {'provider': 'netease'})
 
+    def test_missing_netease_credentials_explain_local_setup_for_every_entry(self):
+        config = self.base / 'config.json'
+        config.write_text('{"provider":"netease","month":"2026-08"}', encoding='utf-8')
+        job = self.base / 'job.json'
+        job.write_text(json.dumps({'root': str(self.base / 'final'), 'query': {'provider': 'netease', 'month': '2026-08'}}), encoding='utf-8')
+        commands = [(q.main, ['imap_export.py', '--config', str(config), '--root', str(self.base / 'final')]),
+                    (q.main, ['imap_export.py', '--config', str(config), '--list-mailboxes']),
+                    (resume.main, ['resume_export.py', 'prepare', '--job', str(job), '--work', str(self.base / 'cache')])]
+        env = {'QQ_EMAIL_ACCOUNT': 'unit@qq.com', 'QQ_EMAIL_AUTH_CODE': 'QQ-SECRET',
+               'NETEASE_EMAIL_ACCOUNT': 'unit@163.com'}
+        for entry, args in commands:
+            output = io.StringIO()
+            with self.subTest(entry=args[0], action=args[-2]), patch.dict(q.os.environ, env, clear=True), \
+                    patch.object(q.sys, 'argv', args), patch.object(q.imaplib, 'IMAP4_SSL') as factory, \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(entry(), 2)
+                factory.assert_not_called()
+            result = json.loads(output.getvalue())
+            self.assertFalse(result['complete'])
+            self.assertEqual(result['action_required'], {'type': 'configure_local_credentials', 'provider': 'netease',
+                             'missing_env': ['NETEASE_EMAIL_AUTH_CODE'], 'browser_login_required': False})
+            self.assertNotIn('QQ-SECRET', output.getvalue())
+        self.assertFalse((self.base / 'final').exists())
+        self.assertFalse((self.base / 'cache').exists())
+
+    def test_missing_qq_and_custom_credentials_use_same_setup_contract(self):
+        for config, names in [({}, ['QQ_EMAIL_ACCOUNT', 'QQ_EMAIL_AUTH_CODE']),
+                              ({'provider': 'custom', 'connection': {'host': 'imap.example.test',
+                                'account_env': 'COMPANY_USER', 'auth_code_env': 'COMPANY_CODE'}},
+                               ['COMPANY_USER', 'COMPANY_CODE'])]:
+            with patch.dict(q.os.environ, {}, clear=True), self.assertRaises(q.ExportError) as context:
+                q.credentials(config)
+            self.assertEqual(context.exception.action_required['missing_env'], names)
+            self.assertFalse(context.exception.action_required['browser_login_required'])
+
     def test_check_config_cli_no_secret_or_network(self):
         config = self.base / 'config.json'
         config.write_text('{"provider":"netease"}', encoding='utf-8')

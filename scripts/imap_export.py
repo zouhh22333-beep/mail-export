@@ -527,7 +527,10 @@ def main():
         return 0 if report['complete'] else 1
     except (ExportError, ArchiveError, OSError, ValueError, TypeError, imaplib.IMAP4.error) as exc:
         error = str(exc) if isinstance(exc, (ExportError, ArchiveError)) else 'imap_or_local_operation_failed:' + type(exc).__name__
-        print(json.dumps({'complete': False, 'error': error}, ensure_ascii=False))
+        report = {'complete': False, 'error': error}
+        if isinstance(exc, ExportError) and exc.action_required:
+            report['action_required'] = exc.action_required
+        print(json.dumps(report, ensure_ascii=False))
         return 2
     finally:
         if session is not None:

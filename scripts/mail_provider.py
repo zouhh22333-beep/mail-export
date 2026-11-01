@@ -7,7 +7,9 @@ import re
 
 
 class ExportError(Exception):
-    pass
+    def __init__(self, message, *, action_required=None):
+        super().__init__(message)
+        self.action_required = action_required
 
 
 NETEASE_HOSTS = {domain: 'imap.' + domain for domain in ('163.com', '126.com', 'yeah.net')}
@@ -82,7 +84,10 @@ def credentials(config=None):
     account = os.environ.get(account_var, '').strip()
     secret = os.environ.get(secret_var, '').strip()
     if not account or not secret:
-        raise ExportError('missing_' + account_var + '_or_' + secret_var)
+        missing = [name for name, value in ((account_var, account), (secret_var, secret)) if not value]
+        raise ExportError('missing_' + account_var + '_or_' + secret_var,
+                          action_required={'type': 'configure_local_credentials', 'provider': provider,
+                                           'missing_env': missing, 'browser_login_required': False})
     profile_for(account, config)
     if any(ord(c) < 32 or ord(c) == 127 for c in secret):
         raise ExportError('invalid_authorization_code_control_character')
