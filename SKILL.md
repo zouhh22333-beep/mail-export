@@ -13,7 +13,7 @@ QQ 凭据环境变量为 QQ_EMAIL_ACCOUNT / QQ_EMAIL_AUTH_CODE，网易为 NETEA
 
 从用户要求确定范围、保存内容、最终路径和命名，一次构建任务。已知参数不查源码，已知文件夹不重复 LIST；凭据由脚本检查，不单独预检查。不重复用连接器扫描相同邮件。只在真正缺少关键条件或脚本报错时追查。
 
-Windows 首次缺少凭据时，运行 `python "<skill>/scripts/setup_mailbox.py" --provider netease`（QQ 用 qq）打开掩码输入窗口。用户也可双击包内“配置邮箱.cmd”。不要要求用户输入 PowerShell 命令或把授权码写进对话。启动返回 status_path；保存后读取该文件确认 state=saved，取消则结束配置。保存只代表已配置，接着用 --list-mailboxes 验证真实登录，再续跑原任务。首次配置无需重启；更新已有进程变量时需重启 Domi。图形助手暂仅支持 Windows，其他系统沿用宿主秘密环境配置。
+Windows/macOS 首次缺少凭据时，运行 `python "<skill>/scripts/setup_mailbox.py" --provider netease`（QQ 用 qq，Mac 使用实际 Python 3.10+，常见命令为 python3）打开本机输入窗口。Windows 用户也可双击包内“配置邮箱.cmd”。不要让用户输入终端命令或把授权码写进对话。启动返回 status_path；读取状态为 saved 后，用 --list-mailboxes 验证登录并续跑，cancelled 则结束配置，failed 则按错误处理。Windows 保存到当前用户环境变量；Mac 保存到本 skill 专用钥匙串条目，可能出现系统访问授权提示。首次配置均可直接续跑；Windows 更新已有进程变量仍需重启 Domi，Mac 在未设置环境覆盖时更新钥匙串立即生效。Linux 沿用宿主秘密环境配置。
 
 ## 简历任务
 

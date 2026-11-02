@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import re
+import sys
 
 
 class ExportError(Exception):
@@ -102,6 +103,14 @@ def credentials(config=None):
     secret_var = connection.get('auth_code_env', prefix + '_AUTH_CODE')
     account = credential_value(account_var)
     secret = credential_value(secret_var)
+    if sys.platform == 'darwin' and provider in ('qq', 'netease') and (not account or not secret):
+        import mac_keychain
+        try:
+            stored = mac_keychain.load(provider)
+            account = account or stored.get('account', '')
+            secret = secret or stored.get('auth_code', '')
+        except (mac_keychain.KeychainError, OSError, ValueError):
+            raise ExportError('mac_keychain_access_failed_allow_access_or_run_setup') from None
     if not account or not secret:
         missing = [name for name, value in ((account_var, account), (secret_var, secret)) if not value]
         raise ExportError('missing_' + account_var + '_or_' + secret_var,

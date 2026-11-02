@@ -4,9 +4,9 @@ QQ、网易与自定义企业 IMAP 共用下载、缓存、简历归组和去重
 
 ## 账号与通道
 
-Windows 推荐在 Domi 中说“帮我配置网易邮箱用于批量下载”，由 Domi 运行 `python "<skill>/scripts/setup_mailbox.py" --provider netease` 打开本机表单。也可双击包内“配置邮箱.cmd”，选择 QQ 或网易并输入账号、授权码。助手保存到当前 Windows 用户环境变量；密钥不放任务文件、不进入聊天。status_path 仅含 waiting/saved/cancelled。保存后仍需实际登录验证，失败时回到配置窗口修正。
+Windows/macOS 推荐在 Domi 中说“帮我配置网易邮箱用于批量下载”，由 Domi 运行 `python "<skill>/scripts/setup_mailbox.py" --provider netease` 打开本机表单。也可双击包内“配置邮箱.cmd”，选择 QQ 或网易并输入账号、授权码。Windows 助手保存到当前用户环境变量；macOS 使用原生账号输入框和隐藏授权码输入框，将账号及授权码作为一条记录保存到系统钥匙串，服务名 com.mail-export.credentials，按 qq/netease 隔离；密钥不放任务文件、不进入聊天。status_path 仅含 waiting/saved/cancelled。保存后仍需实际登录验证，失败时回到配置窗口修正。
 
-首次配置后，脚本在进程变量缺失时读取相应 Windows 用户环境变量，Domi 可直接续跑；更新旧配置时进程变量优先，需重启 Domi。图形助手暂仅支持 Windows。macOS/Linux 仍使用实际宿主环境配置。
+首次配置后，脚本在进程变量缺失时读取相应 Windows 用户环境变量，Domi 可直接续跑；更新旧配置时进程变量优先，需重启 Domi。Mac 不依赖终端变量或 Finder 启动方式，脚本直接读取钥匙串；系统可能要求允许当前 Python 进程访问。环境变量仍优先，可用于远端环境；若显式设置过旧值，需更新/移除覆盖后再用钥匙串。Linux 暂无图形助手。
 
 | provider | 邮箱范围 | 服务器 | 环境变量 |
 | --- | --- | --- | --- |
@@ -16,11 +16,11 @@ Windows 推荐在 Domi 中说“帮我配置网易邮箱用于批量下载”，
 
 provider 由用户要求确定，不能因网易凭据缺失就改拉 QQ。普通导出配置的顶层写 provider；简历任务写 query.provider。网易 VIP、企业自有域名不自动当作免费邮箱；先确认服务端配置。
 
-在邮箱网页设置中开启 IMAP 并生成客户端授权码（不是网页登录密码）。由用户在 **Domi 实际执行脚本的环境** 中配置完整邮箱账号和授权码。Windows 首次配置可即时读取用户变量，更新旧配置后重启 Domi；macOS 从终端启动时可继承变量，但 Finder 启动不保证继承 shell 配置，应使用宿主支持的秘密配置。远端/容器运行则在远端配置。本机 D 盘只对本机可访问的运行进程有效。
+在邮箱网页设置中开启 IMAP 并生成客户端授权码（不是网页登录密码）。由用户在 **Domi 实际执行脚本的环境** 中配置完整邮箱账号和授权码。Windows 首次配置可即时读取用户变量，更新旧配置后重启 Domi；macOS 推荐用图形助手保存到钥匙串；显式环境变量仍优先。远端/容器运行则在远端配置。本机 D 盘只对本机可访问的运行进程有效。
 
 不要求用户把授权码发到聊天，不写任务文件、日志或仓库，不读取 Domi 内部凭据库。已连接 Domi 邮箱不代表 Python 进程能取得其授权码。
 
-QQ 与网易日常导出均不依赖内置浏览器登录。缺少环境变量时 CLI 返回 action_required（type=configure_local_credentials、missing_env、browser_login_required=false）；只提示这些缺失项，不把“没有脚本凭据”解释成“请登录内置浏览器”。Windows 可使用图形助手完成配置后直接续跑；已有进程凭据需要更新时重启 Domi，其他系统刷新实际执行环境。网页登录只可能用于用户首次开启 IMAP、生成授权码或处理服务商安全验证；不自动作为附件下载通道。
+QQ 与网易日常导出均不依赖内置浏览器登录。缺少环境变量时 CLI 返回 action_required（type=configure_local_credentials、missing_env、browser_login_required=false）；只提示这些缺失项，不把“没有脚本凭据”解释成“请登录内置浏览器”。Windows/macOS 可使用图形助手完成首次配置后直接续跑；Windows 已有进程凭据需要更新时重启 Domi。网页登录只可能用于用户首次开启 IMAP、生成授权码或处理服务商安全验证；不自动作为附件下载通道。
 
 只在首次配置或诊断时创建连接配置，例如：
 
@@ -144,3 +144,5 @@ QQ 邮箱服务器及授权码说明参考 [腾讯云邮件集成文档](https:/
 
 
 
+
+Mac 助手与钥匙串访问采用系统 osascript 原生对话框及 Security.framework 的 SecItem 接口，不依赖 tkinter 或第三方包。授权码不作为进程命令行参数、不写临时凭据文件，配置状态文件只含状态。钥匙串存储机制见 [Apple Keychain 文档](https://developer.apple.com/documentation/security/adding-a-password-to-the-keychain)，输入框见 [Apple 原生隐藏输入](https://developer.apple.com/library/archive/documentation/LanguagesUtilities/Conceptual/MacAutomationScriptingGuide/PromptforText.html)。目前在 Windows 上通过模拟测试，尚未在 Mac 真机验证 GUI、系统授权弹窗和登录；部署验收需要补此项。
