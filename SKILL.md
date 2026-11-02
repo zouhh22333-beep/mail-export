@@ -17,6 +17,8 @@ Windows/macOS 首次缺少凭据时，运行 `python "<skill>/scripts/setup_mail
 
 ## 简历任务
 
+用户要求进入正文链接提取简历，或明确包含招聘平台链接简历时，任务设 follow_links=true，并读取 [链接简历](references/resume-links.md)。此时 prepare 还会返回 links；用 Domi 实际浏览器工具查看目标、下载原文件，再运行 attach-links 接回同一快照后统一识别归档。邮件 IMAP 登录与招聘平台登录独立，平台要求登录时请用户完成；不得把登录页、过期页当简历。其他任务不自动打开正文链接，避免增加无关访问。
+
 使用 [简历流程](references/resume-workflow.md)：一次 prepare，批量判断不同内容，一次 finish。不要逐文件启动模型分析或另写整理脚本。
 
 - 默认 layout=auto、include_companions=true：只有简历时直接放根目录；简历加其他随附材料时才建子文件夹，把同信所有材料放进去。多个文件都是简历也不建目录。子文件夹与独立简历同层。

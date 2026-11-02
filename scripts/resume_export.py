@@ -24,11 +24,13 @@ def fingerprint(value):
 
 
 def validate_job(job):
-    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions', 'folder_template'}:
+    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions', 'folder_template', 'follow_links'}:
         raise ArchiveError('invalid_job_fields')
     if not isinstance(job.get('root'), str) or not Path(job['root']).is_absolute():
         raise ArchiveError('root_must_be_absolute')
     result = dict(job)
+    if 'follow_links' in result and type(result['follow_links']) is not bool:
+        raise ArchiveError('follow_links_must_be_boolean')
     result['query'] = imap.validate(job.get('query'))
     if result['query']['mode'] != 'attachments':
         raise ArchiveError('resume_workflow_requires_attachment_mode')
@@ -113,7 +115,7 @@ def prepare(job, work, session):
     run = work / fingerprint({'job': job, 'account': imap.metadata_key(session)})
     stage = run / 'candidates'
     download = imap.export(query, str(stage), session)
-    rows, context = [], {}
+    rows, context, link_metadata = [], {}, {}
     store = Store(str(stage))
     try:
         account = imap.account_key(session)
@@ -127,6 +129,8 @@ def prepare(job, work, session):
             path = str(store.destination(store.root / row['relative_path']))
             if row['kind'] == 'email':
                 context[row['message_id']] = path
+                link_metadata[row['message_id']] = dict(subject=meta['subject'], sender=meta['sender'],
+                    date=datetime.fromisoformat(meta['received']).date().isoformat(), uid=uid)
                 continue
             rows.append(dict(id=fingerprint([account, row['message_id'], row['part_id']]),
                 message_id=row['message_id'], part_id=row['part_id'], subject=meta['subject'], sender=meta['sender'],
@@ -136,10 +140,15 @@ def prepare(job, work, session):
         store.close()
     snapshot = dict(version=1, job=job, account=account, candidates=rows, context_eml=context,
                     download_complete=download['complete'])
+    if job.get('follow_links'):
+        from resume_links import discover
+        snapshot['links'] = discover(context, link_metadata)
+        snapshot['link_stage'] = str(run / 'linked-files')
     snapshot_id = fingerprint(snapshot)
     write_json(run / 'snapshot.json', snapshot)
-    return dict(complete=False, phase='awaiting_classification', snapshot=str(run / 'snapshot.json'),
+    return dict(complete=False, phase='awaiting_links' if snapshot.get('links') else 'awaiting_classification', snapshot=str(run / 'snapshot.json'),
                 snapshot_id=snapshot_id, candidates=inventory(snapshot),
+                **({'links': snapshot['links']} if job.get('follow_links') else {}),
                 download_complete=download['complete'], performance=download['performance'],
                 download_counts=download['counts'], download_failures=[r for r in download['results'] if r['state'] == 'failed'])
 
@@ -176,6 +185,10 @@ def group_directory(store, account, row, prefix, template, index):
 def finish(snapshot, decisions):
     started = perf_counter()
     job = validate_job(snapshot['job'])
+    unresolved_links = [link['id'] for link in snapshot.get('links', [])
+                        if link.get('resolution', {}).get('state') not in ('downloaded', 'not_resume')]
+    if unresolved_links:
+        return dict(complete=False, phase='awaiting_links', unresolved_links=unresolved_links)
     if not snapshot.get('download_complete'):
         raise ArchiveError('candidate_download_incomplete_rerun_prepare')
     if not isinstance(decisions, dict) or decisions.get('snapshot_id') != fingerprint(snapshot):
@@ -239,11 +252,12 @@ def finish(snapshot, decisions):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('phase', choices=('prepare', 'finish'))
+    parser.add_argument('phase', choices=('prepare', 'finish', 'attach-links'))
     parser.add_argument('--job')
     parser.add_argument('--work')
     parser.add_argument('--snapshot')
     parser.add_argument('--decisions')
+    parser.add_argument('--downloads')
     args = parser.parse_args()
     session = None
     try:
@@ -260,12 +274,23 @@ def main():
             result = prepare(job, args.work, session)
             result['performance']['connect_seconds'] = round(connect_seconds, 4)
             result['performance']['total_seconds'] = round(perf_counter() - connected_at, 4)
+        elif args.phase == 'attach-links':
+            if not args.snapshot or not args.downloads:
+                raise ArchiveError('snapshot_and_downloads_required')
+            from resume_links import attach
+            snapshot = read(args.snapshot)
+            snapshot = attach(snapshot, read(args.downloads), fingerprint(snapshot))
+            write_json(Path(args.snapshot), snapshot)
+            pending = any(link.get('resolution', {}).get('state') not in ('downloaded', 'not_resume')
+                          for link in snapshot.get('links', []))
+            result = dict(complete=False, phase='awaiting_links' if pending else 'awaiting_classification', snapshot=args.snapshot,
+                snapshot_id=fingerprint(snapshot), candidates=inventory(snapshot), links=snapshot.get('links', []))
         else:
             if not args.snapshot or not args.decisions:
                 raise ArchiveError('snapshot_and_decisions_required')
             result = finish(read(args.snapshot), read(args.decisions))
         print(json.dumps(result, ensure_ascii=False))
-        return 0 if result.get('complete') or (args.phase == 'prepare' and result.get('download_complete')) else 1
+        return 0 if result.get('complete') or args.phase == 'attach-links' or (args.phase == 'prepare' and result.get('download_complete')) else 1
     except (ArchiveError, imap.ExportError, OSError, ValueError, KeyError, TypeError, imap.imaplib.IMAP4.error) as exc:
         report = dict(complete=False, error=str(exc) if isinstance(exc, (ArchiveError, imap.ExportError)) else type(exc).__name__)
         if isinstance(exc, imap.ExportError) and exc.action_required:
