@@ -15,6 +15,25 @@ class ExportError(Exception):
 NETEASE_HOSTS = {domain: 'imap.' + domain for domain in ('163.com', '126.com', 'yeah.net')}
 
 
+def credential_value(name):
+    value = os.environ.get(name, '').strip()
+    if value or os.name != 'nt':
+        return value
+    return user_environment(name)
+
+
+def user_environment(name):
+    # A running Domi process may predate the user's GUI configuration.
+    # Read only the explicitly selected variables, never the connector vault.
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, 'Environment') as key:
+            value, kind = winreg.QueryValueEx(key, name)
+            return value.strip() if kind in (winreg.REG_SZ, winreg.REG_EXPAND_SZ) and isinstance(value, str) else ''
+    except OSError:
+        return ''
+
+
 def validate_connection(config):
     provider = config.get('provider', 'qq')
     if not isinstance(provider, str) or provider not in ('qq', 'netease', 'custom'):
@@ -81,8 +100,8 @@ def credentials(config=None):
     prefix = {'qq': 'QQ_EMAIL', 'netease': 'NETEASE_EMAIL', 'custom': 'MAIL_IMAP'}[provider]
     account_var = connection.get('account_env', prefix + '_ACCOUNT')
     secret_var = connection.get('auth_code_env', prefix + '_AUTH_CODE')
-    account = os.environ.get(account_var, '').strip()
-    secret = os.environ.get(secret_var, '').strip()
+    account = credential_value(account_var)
+    secret = credential_value(secret_var)
     if not account or not secret:
         missing = [name for name, value in ((account_var, account), (secret_var, secret)) if not value]
         raise ExportError('missing_' + account_var + '_or_' + secret_var,

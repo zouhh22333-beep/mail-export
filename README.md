@@ -4,7 +4,7 @@
 
 ## 安装与配置
 
-下载 [mail-export.zip](mail-export.zip)，按宿主方式导入其中 mail-export 目录。包只含十个运行文件；不在每次导出前重新安装。入口见 [SKILL.md](SKILL.md)，连接与任务参数见 [IMAP 配置](references/imap.md)，简历步骤见 [简历流程](references/resume-workflow.md)。
+下载 [mail-export.zip](mail-export.zip)，按宿主方式导入其中 mail-export 目录。包只含运行所需文件；不在每次导出前重新安装。入口见 [SKILL.md](SKILL.md)，连接与任务参数见 [IMAP 配置](references/imap.md)，简历步骤见 [简历流程](references/resume-workflow.md)。
 
 - QQ：默认 provider=qq，使用 QQ_EMAIL_ACCOUNT / QQ_EMAIL_AUTH_CODE，旧命令和索引兼容。
 - 网易免费邮箱 163/126/yeah.net：provider=netease，使用 NETEASE_EMAIL_ACCOUNT / NETEASE_EMAIL_AUTH_CODE。
@@ -13,6 +13,10 @@
 凭据只配置在 Domi 实际执行环境，现有连接器登录不会自动提供给脚本。不把邮件、缓存或授权码上传仓库。
 
 QQ 和网易日常拉取都不需要登录内置浏览器。首次开启邮箱 IMAP 并配置本地账号/授权码后，使用相同自然语言命令即可；缺配置时脚本返回明确的缺失变量，skill 提示配置后续跑，不自动切换到网页版下载。
+
+Windows 首次使用可在 Domi 中说“帮我配置网易邮箱用于批量下载”，由 skill 打开本机输入窗口；也可双击包内“配置邮箱.cmd”。无需手动写 PowerShell 命令。账号和授权码保存在当前用户环境变量中，保存后验证登录再下载。首次配置无需重启 Domi，更新旧配置需要重启。macOS/Linux 暂无图形助手。
+
+日期解析兼容空格补位、零补位和单数字形式，包括网易返回的 `INTERNALDATE " 8-Oct-2026 13:47:27 +0800"`，保留服务器时区用于排序与命名。
 
 ## 目录与性能
 

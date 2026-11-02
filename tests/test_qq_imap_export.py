@@ -70,6 +70,9 @@ class FakeSession:
 
 class ExportTests(unittest.TestCase):
     def setUp(self):
+        self.registry_patch = patch('mail_provider.user_environment', return_value='')
+        self.registry_patch.start()
+        self.addCleanup(self.registry_patch.stop)
         self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)
         self.root = str(Path(self.temp.name) / 'archive')
 

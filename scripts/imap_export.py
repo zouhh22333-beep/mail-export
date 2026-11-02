@@ -166,7 +166,9 @@ def literal(data):
 
 def received_at(data):
     head = b' '.join(v[0] if isinstance(v, tuple) else v for v in data if isinstance(v, (tuple, bytes)))
-    match = re.search(rb'INTERNALDATE "(\d{1,2})-([A-Za-z]{3})-(\d{4}) (\d{2}):(\d{2}):(\d{2}) ([+-])(\d{2})(\d{2})"', head)
+    # IMAP date-day-fixed permits SP DIGIT as well as two digits.
+    # Accept unpadded single digits too, for servers using that variant.
+    match = re.search(rb'INTERNALDATE "( [0-9]|[0-9]{1,2})-([A-Za-z]{3})-([0-9]{4}) ([0-9]{2}):([0-9]{2}):([0-9]{2}) ([+-])([0-9]{2})([0-9]{2})"', head, re.I)
     if not match:
         raise ExportError('missing_INTERNALDATE_cannot_order_latest')
     day, month, year, hour, minute, second, sign, zoneh, zonem = [v.decode() for v in match.groups()]

@@ -74,6 +74,9 @@ def message(files):
 
 class ProviderTests(unittest.TestCase):
     def setUp(self):
+        self.registry_patch = patch('mail_provider.user_environment', return_value='')
+        self.registry_patch.start()
+        self.addCleanup(self.registry_patch.stop)
         self.temp = tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parent)
         self.base = Path(self.temp.name)
         self.events, self.clients, self.endpoints = [], [], []
@@ -113,6 +116,46 @@ class ProviderTests(unittest.TestCase):
                     session.close()
         self.assertEqual(sum(e[0] == 'ID' for e in self.events), 6)
         self.assertTrue(all(e[2] for e in self.events if e[0] == 'select'))
+
+    def test_padded_internaldate_and_export_naming(self):
+        for day in ('8', '08', ' 8'):
+            for zone in ('+0800', '-0530', '+0000'):
+                parsed = q.received_at([f'1 (UID 1 INTERNALDATE "{day}-Oct-2026 13:47:27 {zone}")'.encode()])
+                self.assertEqual((parsed.day, parsed.hour, parsed.strftime('%z')), (8, 13, zone))
+        fake = FakeSession({'1': mail(), '2': mail('older')})
+        original = fake.fetch
+        def padded(uid, fields):
+            rows = original(uid, fields)
+            return [(row[0].replace(b'29-Oct', b' 8-Oct').replace(b'28-Oct', b'07-Oct'), row[1])
+                    if isinstance(row, tuple) else row for row in rows]
+        fake.fetch = padded
+        result = q.export(q.validate({'limit': 1, 'name_template': '{date}{ext}'}), str(self.base/'dated'), fake)
+        self.assertEqual(result['messages'][0]['uid'], '1')
+        self.assertEqual([Path(r['path']).name for r in result['results']], ['2026-10-08.pdf', '2026-10-08 (2).pdf'])
+
+    def test_registry_fallback_and_process_environment_priority(self):
+        import mail_provider as provider
+        values = {'NETEASE_EMAIL_ACCOUNT': 'unit@163.com', 'NETEASE_EMAIL_AUTH_CODE': 'REGISTRY-SECRET'}
+        with patch.dict(q.os.environ, {}, clear=True), patch.object(provider, 'user_environment', side_effect=values.get):
+            self.assertEqual(provider.credentials({'provider': 'netease'}), ('unit@163.com', 'REGISTRY-SECRET'))
+        with patch.dict(q.os.environ, {'NETEASE_EMAIL_ACCOUNT': 'process@163.com', 'NETEASE_EMAIL_AUTH_CODE': 'PROCESS-SECRET'}, clear=True), patch.object(provider, 'user_environment') as registry:
+            self.assertEqual(provider.credentials({'provider': 'netease'}), ('process@163.com', 'PROCESS-SECRET'))
+            registry.assert_not_called()
+
+    def test_setup_launcher_only_passes_provider_and_nonsecret_status(self):
+        import setup_mailbox
+        output = io.StringIO()
+        with patch.object(q.sys, 'argv', ['setup_mailbox.py', '--provider', 'netease']), \
+                patch.object(setup_mailbox.tempfile, 'gettempdir', return_value=str(self.base)), \
+                patch.object(setup_mailbox.subprocess, 'Popen') as launch, contextlib.redirect_stdout(output):
+            self.assertEqual(setup_mailbox.main(), 0)
+        result = json.loads(output.getvalue())
+        self.assertTrue(result['launched'])
+        self.assertFalse(result['authenticated'])
+        self.assertEqual(json.loads(Path(result['status_path']).read_text()), {'state': 'waiting'})
+        args = launch.call_args.args[0]
+        self.assertTrue(any(a.endswith('setup_mailbox.ps1') for a in args))
+        self.assertEqual(args[-4:-2], ['-Provider', 'netease'])
 
     def test_reconnect_repeats_ID_before_readonly_select(self):
         with patch.object(q.imaplib, 'IMAP4_SSL', side_effect=self.factory):
