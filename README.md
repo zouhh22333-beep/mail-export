@@ -1,20 +1,22 @@
 # Mail Export
 
-批量保存 QQ、网易与兼容企业 IMAP 邮箱的邮件、简历和原始附件到本地。Python 3.10+ 标准库；宿主负责内容识别，程序负责字节下载、命名、归组与去重。
+批量保存邮件、简历和原始附件到本地。优先使用已授权且能下载原始附件的邮箱连接器，必要时使用 QQ、网易或兼容企业邮箱的只读 IMAP。宿主负责内容识别，归档脚本负责保存和去重。
 
 ## 安装与配置
 
 下载 [mail-export.zip](mail-export.zip)，按宿主方式导入其中 mail-export 目录。包只含运行所需文件；不在每次导出前重新安装。入口见 [SKILL.md](SKILL.md)，连接与任务参数见 [IMAP 配置](references/imap.md)，简历步骤见 [简历流程](references/resume-workflow.md)。
 
-- QQ：默认 provider=qq，使用 QQ_EMAIL_ACCOUNT / QQ_EMAIL_AUTH_CODE，旧命令和索引兼容。
+仅在任务需要 IMAP 时配置本地凭据。连接器能覆盖任务所需能力时，沿用已有授权即可。每个任务及其续跑固定同一邮箱通道、账号身份和归档索引。详情见 [连接器使用约定](references/connector-tools.md)。
+
+- QQ：IMAP 默认 provider=qq，使用 QQ_EMAIL_ACCOUNT / QQ_EMAIL_AUTH_CODE，旧命令和索引兼容。
 - 网易免费邮箱 163/126/yeah.net：provider=netease，使用 NETEASE_EMAIL_ACCOUNT / NETEASE_EMAIL_AUTH_CODE。
 - 企业 IMAP：provider=custom，明确配置 TLS 服务器；账号与授权码通过指定环境变量提供。OAuth/Exchange API 尚未实现，企业服务商未实测。
 
-凭据只配置在 Domi 实际执行环境，现有连接器登录不会自动提供给脚本。不把邮件、缓存或授权码上传仓库。
+IMAP 凭据只配置在 Domi 实际执行环境。服务商支持时优先用只读授权码和适用的独立低权限邮箱账号，定期轮换授权码。脚本不打印或记录授权码。
 
 QQ 和网易日常拉取都不需要登录内置浏览器。首次开启邮箱 IMAP 并配置本地账号/授权码后，使用相同自然语言命令即可；缺配置时脚本返回明确的缺失变量，skill 提示配置后续跑，不自动切换到网页版下载。
 
-Windows/macOS 首次使用可在 Domi 中说“帮我配置网易邮箱用于批量下载”，由 skill 打开本机输入窗口；Windows 也可双击包内“配置邮箱.cmd”。无需手动写终端命令。Windows 保存到用户环境变量，Mac 保存到系统钥匙串；状态文件不含密钥。保存后验证登录再下载。首次配置无需重启 Domi，Windows 更新旧进程凭据后需要重启。Linux 暂无图形助手。
+Windows/macOS 首次配置 IMAP 时可在 Domi 中说“帮我配置网易邮箱用于批量下载”，由 skill 打开本机输入窗口。Windows 也可双击包内“配置邮箱.cmd”。Windows 保存到用户环境变量，Mac 保存到系统钥匙串。保存后验证登录再下载。
 
 日期解析兼容空格补位、零补位和单数字形式，包括网易返回的 `INTERNALDATE " 8-Oct-2026 13:47:27 +0800"`，保留服务器时区用于排序与命名。
 

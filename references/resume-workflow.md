@@ -2,7 +2,9 @@
 
 宿主负责内容识别，程序负责真实字节、命名、目录和索引。不要重新实现下载、整理和校验脚本。
 
-QQ、网易及自定义 IMAP 共用以下流程；query.provider 分别选 qq、netease、custom（省略兼容 QQ）。网易示例设 `"query":{"provider":"netease","mailbox":"INBOX","month":"2026-08"}`。企业配置及凭据变量见 [IMAP 配置](imap.md)。发件箱名称以实际 LIST 为准，不能把 QQ 的 Sent Messages 硬套到网易。
+以下 prepare 和 finish 命令用于已选定 IMAP 的任务。连接器能下载所需的原始附件时，按 [连接器使用约定](connector-tools.md) 获取文件，再按相同的识别、命名和归组规则归档。
+
+QQ、网易及自定义 IMAP 的 query.provider 分别为 qq、netease、custom，省略时兼容 QQ。网易示例设 `"query":{"provider":"netease","mailbox":"INBOX","month":"2026-08"}`。企业配置及凭据变量见 [IMAP 配置](imap.md)。发件箱名称以实际 LIST 为准。
 
 创建 UTF-8 任务 JSON（日期、路径和命名按用户要求）：
 
