@@ -324,5 +324,75 @@ class ProviderTests(unittest.TestCase):
         self.assertNotIn('SECRET', output.getvalue())
 
 
+    def test_account_mismatch_stops_export_before_login_or_writes(self):
+        config = self.base / 'config.json'
+        job = self.base / 'job.json'
+        final = self.base / 'final'
+        cache = self.base / 'cache'
+        query = {'provider': 'netease', 'limit': 1}
+        config.write_text(json.dumps(dict(query, expect_account='target@163.com')), encoding='utf-8')
+        job.write_text(json.dumps({'root': str(final), 'query': query, 'expect_account': 'target@163.com'}), encoding='utf-8')
+        commands = [
+            (q.main, ['imap_export.py', '--config', str(config), '--root', str(final)]),
+            (q.main, ['imap_export.py', '--config', str(config), '--check-config']),
+            (q.main, ['imap_export.py', '--config', str(config), '--list-mailboxes']),
+            (q.main, ['imap_export.py', '--config', str(config), '--whoami']),
+            (resume.main, ['resume_export.py', 'prepare', '--job', str(job), '--work', str(cache)]),
+        ]
+        env = {'NETEASE_EMAIL_ACCOUNT': 'other@163.com', 'NETEASE_EMAIL_AUTH_CODE': 'PRIVATE-TEST-CODE'}
+        for entry, args in commands:
+            output = io.StringIO()
+            with self.subTest(args=args), patch.dict(q.os.environ, env, clear=True), \
+                    patch.object(q.sys, 'argv', args), patch.object(q.imaplib, 'IMAP4_SSL') as factory, \
+                    contextlib.redirect_stdout(output):
+                self.assertEqual(entry(), 3 if '--whoami' in args else 2)
+                factory.assert_not_called()
+            report = json.loads(output.getvalue())
+            self.assertEqual(report['error'], 'account_mismatch')
+            self.assertEqual(report['action_required']['configured_account'], 'other@163.com')
+            self.assertEqual(report['action_required']['expected_account'], 'target@163.com')
+            self.assertNotIn('PRIVATE-TEST-CODE', output.getvalue())
+        self.assertFalse(final.exists())
+        self.assertFalse(cache.exists())
+
+    def test_matching_account_exports_and_reports_actual_login(self):
+        config = self.base / 'config.json'
+        config.write_text(json.dumps({'provider': 'netease', 'limit': 1, 'expect_account': ' UNIT@163.COM '}), encoding='utf-8')
+        root = self.base / 'archive'
+        output = io.StringIO()
+        env = {'NETEASE_EMAIL_ACCOUNT': 'unit@163.com', 'NETEASE_EMAIL_AUTH_CODE': 'PRIVATE-TEST-CODE'}
+        with patch.dict(q.os.environ, env, clear=True), \
+                patch.object(q.sys, 'argv', ['imap_export.py', '--config', str(config), '--root', str(root)]), \
+                patch.object(q.imaplib, 'IMAP4_SSL', side_effect=self.factory), contextlib.redirect_stdout(output):
+            self.assertEqual(q.main(), 0)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report['complete'])
+        self.assertEqual(report['account'], 'unit@163.com')
+        self.assertGreater(report['counts']['saved'], 0)
+        self.assertNotIn('PRIVATE-TEST-CODE', output.getvalue())
+
+    def test_conflicting_resume_expected_accounts_rejected(self):
+        job = {'root': str(self.base / 'final'), 'query': {'limit': 1, 'expect_account': 'other@163.com'},
+               'expect_account': 'target@163.com'}
+        with self.assertRaisesRegex(resume.ArchiveError, 'conflicting_expect_account_values'):
+            resume.validate_job(job)
+
+    def test_whoami_verifies_login_without_reading_mail(self):
+        config = self.base / 'config.json'
+        config.write_text(json.dumps({'provider': 'netease', 'expect_account': 'unit@163.com'}), encoding='utf-8')
+        output = io.StringIO()
+        env = {'NETEASE_EMAIL_ACCOUNT': 'unit@163.com', 'NETEASE_EMAIL_AUTH_CODE': 'PRIVATE-TEST-CODE'}
+        with patch.dict(q.os.environ, env, clear=True), \
+                patch.object(q.sys, 'argv', ['imap_export.py', '--config', str(config), '--whoami']), \
+                patch.object(q.imaplib, 'IMAP4_SSL', side_effect=self.factory), contextlib.redirect_stdout(output):
+            self.assertEqual(q.main(), 0)
+        report = json.loads(output.getvalue())
+        self.assertTrue(report['match'])
+        self.assertEqual(report['account'], 'unit@163.com')
+        self.assertNotIn('PRIVATE-TEST-CODE', output.getvalue())
+        self.assertTrue(any(event[0] == 'login' for event in self.events))
+        self.assertFalse(any(event[0] in ('select', 'SEARCH', 'FETCH') for event in self.events))
+
+
 if __name__ == '__main__':
     unittest.main()

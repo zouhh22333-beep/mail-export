@@ -14,6 +14,25 @@ class ExportError(Exception):
 
 
 NETEASE_HOSTS = {domain: 'imap.' + domain for domain in ('163.com', '126.com', 'yeah.net')}
+EMAIL_ADDRESS = re.compile(r'[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+')
+
+
+def expected_address(value):
+    if not isinstance(value, str) or not EMAIL_ADDRESS.fullmatch(value.strip()):
+        raise ExportError('expect_account_must_be_full_email_address')
+    return value.strip()
+
+
+def check_account(account, expected):
+    if expected is None:
+        return
+    expected = expected_address(expected)
+    if account.strip().casefold() != expected.casefold():
+        raise ExportError('account_mismatch', action_required={
+            'type': 'account_mismatch',
+            'configured_account': account,
+            'expected_account': expected,
+        })
 
 
 def credential_value(name):
@@ -82,7 +101,7 @@ class Profile:
 
 def profile_for(account, config=None):
     provider, connection = validate_connection(config or {})
-    if not re.fullmatch(r'[^\s@\x00-\x1f\x7f]+@[^\s@\x00-\x1f\x7f]+', account):
+    if not EMAIL_ADDRESS.fullmatch(account):
         raise ExportError('account_must_be_full_email_address')
     domain = account.rsplit('@', 1)[1].lower()
     if provider == 'qq':
@@ -97,7 +116,8 @@ def profile_for(account, config=None):
 
 
 def credentials(config=None):
-    provider, connection = validate_connection(config or {})
+    config = config or {}
+    provider, connection = validate_connection(config)
     prefix = {'qq': 'QQ_EMAIL', 'netease': 'NETEASE_EMAIL', 'custom': 'MAIL_IMAP'}[provider]
     account_var = connection.get('account_env', prefix + '_ACCOUNT')
     secret_var = connection.get('auth_code_env', prefix + '_AUTH_CODE')
@@ -117,6 +137,7 @@ def credentials(config=None):
                           action_required={'type': 'configure_local_credentials', 'provider': provider,
                                            'missing_env': missing, 'browser_login_required': False})
     profile_for(account, config)
+    check_account(account, config.get('expect_account'))
     if any(ord(c) < 32 or ord(c) == 127 for c in secret):
         raise ExportError('invalid_authorization_code_control_character')
     return account, secret

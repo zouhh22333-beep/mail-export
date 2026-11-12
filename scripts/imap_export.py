@@ -20,7 +20,7 @@ import sys
 from time import perf_counter
 
 from archive_store import Store, ArchiveError
-from mail_provider import ExportError, credentials, profile_for, validate_connection
+from mail_provider import ExportError, check_account, credentials, expected_address, profile_for, validate_connection
 
 MONTHS = ('Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec')
 PARSER = BytesParser(policy=policy.default)
@@ -40,11 +40,13 @@ def validate(config):
         raise ExportError('config_must_be_object')
     allowed = {'mailbox', 'since', 'before', 'limit', 'all', 'uids', 'from', 'subject',
                'mode', 'filename', 'include_inline', 'name_template', 'directory', 'workers', 'month',
-               'provider', 'connection'}
+               'provider', 'connection', 'expect_account'}
     if set(config) - allowed:
         raise ExportError('unknown_config_fields:' + ','.join(sorted(set(config) - allowed)))
     result = dict(config)
     validate_connection(result)
+    if 'expect_account' in result:
+        result['expect_account'] = expected_address(result['expect_account'])
     if 'month' in result:
         month = result.pop('month')
         if not isinstance(month, str) or not re.fullmatch(r'[0-9]{4}-[0-9]{2}', month) or 'since' in result or 'before' in result:
@@ -398,6 +400,7 @@ def artifacts_from_raw(raw, meta, config):
 
 
 def export(config, root, session):
+    check_account(session.account, config.get('expect_account'))
     started = perf_counter()
     store = Store(root)
     downloads = Downloads(session, config.get('workers', 2))
@@ -490,27 +493,32 @@ def export(config, root, session):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--check-config', action='store_true', help='Check local credential presence only; no network')
-    parser.add_argument('--list-mailboxes', action='store_true', help='List actual folder names; no message downloads')
+    checks = parser.add_mutually_exclusive_group()
+    checks.add_argument('--check-config', action='store_true', help='Check local credential presence only; no network')
+    checks.add_argument('--list-mailboxes', action='store_true', help='List actual folder names; no message downloads')
+    checks.add_argument('--whoami', action='store_true', help='Verify the login account without selecting or reading mail')
     parser.add_argument('--config', help='UTF-8 JSON task, never credentials')
     parser.add_argument('--root', help='Absolute local archive folder')
     args = parser.parse_args()
     session = None
     try:
         raw_config = json.loads(Path(args.config).read_text(encoding='utf-8-sig')) if args.config else {}
-        if args.check_config and args.list_mailboxes:
-            raise ExportError('choose_check_config_or_list_mailboxes')
         if args.check_config:
             config = validate(dict(raw_config, all=True))
             account, _ = credentials(config)
             print(json.dumps({'configured': True, 'account_present': bool(account), 'auth_code_present': True, 'network_checked': False}))
             return 0
-        if args.list_mailboxes:
+        if args.list_mailboxes or args.whoami:
             config = validate(dict(raw_config, all=True))
             account, secret = credentials(config)
             session = Session(account, secret, config['mailbox'], config)
             session.connect(select=False)
-            print(json.dumps({'mailboxes': list_mailboxes(session)}, ensure_ascii=False))
+            if args.whoami:
+                report = {'account': session.account, 'provider': session.profile.provider,
+                          'expected_account': config.get('expect_account'), 'match': True}
+            else:
+                report = {'account': session.account, 'mailboxes': list_mailboxes(session)}
+            print(json.dumps(report, ensure_ascii=False))
             return 0
         if not args.config or not args.root:
             raise ExportError('config_and_root_required')
@@ -523,6 +531,7 @@ def main():
         session.connect()
         connected = perf_counter()
         report = export(config, args.root, session)
+        report['account'] = session.account
         report['performance']['connect_seconds'] = round(connected - started, 4)
         report['performance']['total_seconds'] = round(perf_counter() - started, 4)
         print(json.dumps(report, ensure_ascii=False))
@@ -532,6 +541,11 @@ def main():
         report = {'complete': False, 'error': error}
         if isinstance(exc, ExportError) and exc.action_required:
             report['action_required'] = exc.action_required
+        if args.whoami and error == 'account_mismatch':
+            report.update(account=exc.action_required['configured_account'], provider=config.get('provider', 'qq'),
+                          expected_account=exc.action_required['expected_account'], match=False)
+            print(json.dumps(report, ensure_ascii=False))
+            return 3
         print(json.dumps(report, ensure_ascii=False))
         return 2
     finally:

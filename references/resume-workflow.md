@@ -22,6 +22,8 @@ QQ、网易及自定义 IMAP 的 query.provider 分别为 qq、netease、custom�
 
 ## Prepare
 
+用户指定完整邮箱地址时，在 job 顶层加 `"expect_account": "name@example.com"`，值用用户指定的地址。脚本在登录前核对配置账号，不一致返回 `account_mismatch`，不查询邮件或写候选缓存。核对结果和后续处理见 [IMAP 配置](imap.md)。成功后从结果的 `account` 查看实际登录账号。
+
 ```text
 python "<skill>/scripts/resume_export.py" prepare --job "<任务JSON绝对路径>" --work "<任务私有缓存绝对目录>"
 ```

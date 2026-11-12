@@ -24,7 +24,7 @@ def fingerprint(value):
 
 
 def validate_job(job):
-    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions', 'folder_template', 'follow_links'}:
+    if not isinstance(job, dict) or set(job) - {'root', 'query', 'layout', 'include_companions', 'folder_template', 'follow_links', 'expect_account'}:
         raise ArchiveError('invalid_job_fields')
     if not isinstance(job.get('root'), str) or not Path(job['root']).is_absolute():
         raise ArchiveError('root_must_be_absolute')
@@ -32,6 +32,11 @@ def validate_job(job):
     if 'follow_links' in result and type(result['follow_links']) is not bool:
         raise ArchiveError('follow_links_must_be_boolean')
     result['query'] = imap.validate(job.get('query'))
+    if 'expect_account' in result:
+        result['expect_account'] = imap.expected_address(result['expect_account'])
+        nested = result['query'].get('expect_account')
+        if nested and nested.casefold() != result['expect_account'].casefold():
+            raise ArchiveError('conflicting_expect_account_values')
     if result['query']['mode'] != 'attachments':
         raise ArchiveError('resume_workflow_requires_attachment_mode')
     result.setdefault('layout', 'auto')
@@ -105,6 +110,7 @@ def expand_decisions(snapshot, decisions):
 
 def prepare(job, work, session):
     job = validate_job(job)
+    imap.check_account(session.account, job.get('expect_account'))
     query = dict(job['query'], mode='both')
     # Candidate names remain original; final naming is applied exactly once.
     query.pop('name_template', None)
@@ -147,7 +153,7 @@ def prepare(job, work, session):
     snapshot_id = fingerprint(snapshot)
     write_json(run / 'snapshot.json', snapshot)
     return dict(complete=False, phase='awaiting_links' if snapshot.get('links') else 'awaiting_classification', snapshot=str(run / 'snapshot.json'),
-                snapshot_id=snapshot_id, candidates=inventory(snapshot),
+                snapshot_id=snapshot_id, account=session.account, candidates=inventory(snapshot),
                 **({'links': snapshot['links']} if job.get('follow_links') else {}),
                 download_complete=download['complete'], performance=download['performance'],
                 download_counts=download['counts'], download_failures=[r for r in download['results'] if r['state'] == 'failed'])
@@ -266,7 +272,10 @@ def main():
             if not args.job or not args.work:
                 raise ArchiveError('job_and_work_required')
             job = validate_job(read(args.job))
-            account, secret = imap.credentials(job['query'])
+            config = dict(job['query'])
+            if 'expect_account' in job:
+                config['expect_account'] = job['expect_account']
+            account, secret = imap.credentials(config)
             session = imap.Session(account, secret, job['query']['mailbox'], job['query'])
             connected_at = perf_counter()
             session.connect()

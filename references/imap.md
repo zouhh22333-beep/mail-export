@@ -101,6 +101,7 @@ python "<skill目录>/scripts/imap_export.py" --config "<任务JSON绝对路径>
 | 字段 | 含义 |
 | --- | --- |
 | `provider` | qq（省略兼容 QQ）、netease、custom |
+| `expect_account` | 用户指定的完整邮箱地址，可省略。登录前与配置账号比较，去掉首尾空格并忽略大小写 |
 | `connection` | 仅 custom 使用的服务器及环境变量名；见上文，不得存授权码 |
 | `month` | YYYY-MM，自动转换当月1日至次月1日，不能与 since/before 同时使用 |
 | `mailbox` | 默认 `INBOX`；支持 IMAP 修改版 UTF-7 编码的中文文件夹名称 |
@@ -119,6 +120,14 @@ python "<skill目录>/scripts/imap_export.py" --config "<任务JSON绝对路径>
 日期筛选是服务器邮箱内部日期语义。用户指定其他时区或精确到时分秒时，当前脚本不能直接表达，应说明限制并增加精确时间筛选实现后再执行；不能将 UTC、服务器日期和用户日期默认为同一种范围。
 
 支持命名占位符 `{date}`、`{subject}`、`{sender}`、`{index}`、`{uid}`、`{part}`、`{original}`、`{stem}`、`{ext}`。例如 `{date}_{sender}_{index}{ext}`。不支持 Python 属性访问、表达式或格式说明。日期为 INTERNALDATE 的服务器时区日期；序号按本次选定邮件和 MIME 部分遍历顺序分配，续跑优先保留索引路径。如果任务范围变化导致序号变化，必须保留并使用原任务配置，不自动重命名已保存文件。
+
+指定 `expect_account` 后，普通导出、`--check-config`、`--list-mailboxes` 和 `--whoami` 都先校验账号。不一致时返回 `account_mismatch`，并在 `action_required` 中给出 `configured_account` 和 `expected_account`，在连接邮箱或写入归档之前停止。成功的导出和文件夹列表会返回实际登录账号 `account`。授权码只在本地读取。
+
+只验证登录时运行以下命令。账号匹配时连接验证并报告 `account`、`provider`、`expected_account` 和 `match`，不选择邮箱文件夹或读取邮件。退出码 0 表示登录成功，3 表示账号不匹配，2 表示配置或登录出错。三个独立检查选项互斥。
+
+```text
+python "<skill>/scripts/imap_export.py" --config "<连接JSON绝对路径>" --whoami
+```
 
 ## 下载、校验与恢复
 
